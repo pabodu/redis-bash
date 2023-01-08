@@ -1,63 +1,374 @@
 #!/bin/bash
-# https://github.com/caquino/redis-bash
+# Based on https://github.com/caquino/redis-bash
 
-# -- redis-client
-#
-#  returns an array
-#
-# Args:
-# value -- file descriptor
-# value -- message to be sent (only read if blank)
-#
+DEBUG=1
+MAXSTACK=100 # Limit recursion
 
 if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-    echo "This script requires bash version 4+"
+    echo "This script requires bash version 4+" >/dev/stderr
     exit 1
 fi
 
-function redis-client() {
-  if [ ${#FUNCNAME[@]} -lt 100 ]; then
-    FD=${1}
-    shift;
-    if [ ${#} -ne 0 ]; then # always use unified protocol and let the server validate the number of parameters
-      local ARRAY=( "${@}" )
-      local CMD=("*$[${#ARRAY[@]}]")
-      local i=0
-      for ((i=0;i<${#ARRAY[@]};i++)); do
-        CMD=( "${CMD[@]}" "\$${#ARRAY[${i}]}" "${ARRAY[${i}]}" )
-      done
-      printf "%s\r\n" "${CMD[@]}" >&${FD}
-    fi
-    local ARGV
-    read -r -u ${FD}
+# Get a string value from the result array
+function redis_strval()
+{
 
-    if [ ${#REPLY} -eq 0 ]; then
-        printf "error: no reply\n"
-        exit 1
-    fi
+	local -n dataref=${1}; shift
+	local -n strref=${1}; shift
+	local arg=${1}; shift # Next argument consumed
 
-    REPLY=${REPLY:0:${#REPLY}-1}
-    case ${REPLY} in
-      -*|\$-*) # error message
-        echo "${REPLY:1}"
-        return 1;;
-      \$*) # message size
-        [ ${REPLY:1} -gt 0 ] && read -r -N $[${REPLY:1}+2] -u "${FD}" # read again to get the value itself
-        ARGV=( "${REPLY:0:(-2)}" );;
-      :*) # integer message
-        ARGV=( "${REPLY:1}" );;
-      \**) # bulk reply - recursive based on number of messages
-        unset ARGV
-        for ((ARGC="${REPLY:1}";${ARGC}>0;ARGC--)); do
-          ARGV=("${ARGV[@]}" $(redis-client ${FD}))
-        done;;
-      +*) # standard message
-        ARGV=( "${REPLY:1}" );;
-      *) # wtf? just in case...
-        ARGV=( "${ARGV[@]}" "${REPLY}" );;
-    esac
-    printf "%s\n" "${ARGV[@]}"
-  else
-    printf "ERROR: Recursive function call limit.\n"
-  fi
+	[ "${DEBUG}" -ne 0 ] && printf "redis_strval: " && declare -p ${!dataref}
+
+	if [ ${arg} ]; then
+		
+		if [ "${dataref[type]}" != '*' ]; then
+			echo "redis_strval: no array for index ${arg}; fix your code" >/dev/stderr
+			exit 1
+		fi
+
+		local tmparr=(${dataref[value]})
+		redis_strval ${tmparr[$arg]} ${!strref} "${@}"
+
+		return $?
+	fi
+
+	strref="${dataref[value]}"
+	[ "${DEBUG}" -ne 0 ] && echo "redis_strval: ${strref}"
+	return 0
+}
+
+# Get a size value from the result array
+# (mainly used to check NULL arrays in which case size is "-1")
+function redis_sizeval()
+{
+
+	local -n dataref=${1}; shift
+	local -n sizeref=${1}; shift
+	local arg=${1}; shift # Next argument consumed
+
+	[ "${DEBUG}" -ne 0 ] && printf "redis_sizeval: " && declare -p ${!dataref}
+
+	if [ ${arg} ]; then
+		
+		if [ "${dataref[type]}" != '*' ]; then
+			echo "redis_sizeval: no array for index ${arg}; fix your code" >/dev/stderr
+			exit 1
+		fi
+
+		local tmparr=(${dataref[value]})
+		redis_sizeval ${tmparr[$arg]} ${!strref} "${@}"
+
+		return $?
+	fi
+
+	sizeref="${dataref[size]}"
+	[ "${DEBUG}" -ne 0 ] && echo "redis_sizeval: ${sizeref}"
+	return 0
+}
+
+
+# Get a reply from the server and fill in the result array
+function redis_getreply ()
+{
+	local FD=${1}; shift
+	local -n dataref=${1}; shift
+
+	if [ ${#FUNCNAME[@]} -gt ${MAXSTACK} ]; then
+		printf "redis_getreply: recursive function call limit ${MAXSTACK} exceeded\n" >/dev/stderr
+		return 1
+	fi
+	read -r -u ${FD}
+	if [ ${#REPLY} -eq 0 ]; then
+		printf "redis_getreply: no reply\n" >/dev/stderr
+		return 2
+	fi
+
+	REPLY=${REPLY:0:${#REPLY}-1}
+#	[ "${DEBUG}" -ne 0 ] && echo "redis_getreply: ${REPLY}" > /dev/stderr
+	case ${REPLY} in
+		-*|\$-*) # error message
+			dataref[type]='-'
+			dataref[value]="${REPLY:1}"
+			return 16;;
+		\$*) # message size
+			dataref[size]="${REPLY:1}" # without trailing \r\n
+			[ ${REPLY:1} -gt 0 ] && read -r -N "$[${dataref[size]}+2]" -u "${FD}" # read again to get the value itself
+			dataref[type]='$'
+			dataref[value]="${REPLY:0:(-2)}"
+			;;
+		:*) # integer message
+			dataref[type]=':'
+			dataref[value]="${REPLY:1}"
+			;;
+		\**) # bulk reply - recursive based on number of messages
+			dataref[type]='*'
+			dataref[size]="${REPLY:1}"
+			dataref[value]=""
+			local i
+			for ((i=0;${i}<${dataref[size]};i++)); do
+				local tmpname="array_${RANDOM}"
+				declare -Ag ${tmpname} # -g flag is very important here
+
+				dataref[value]="${dataref[value]} ${tmpname}"
+				redis_getreply ${FD} "${tmpname}"
+			done
+			;;
+		+*) # standard message
+			dataref[type]='+'
+			dataref[value]="${REPLY:1}"
+			;;
+	esac
+	[ "${DEBUG}" -ne 0 ] && printf "redis_getreply: " && declare -p ${!dataref}
+#    printf "%s\n" "${dataref[value]}"
+	return 0
+}
+
+# Send request to the server
+function redis_sendrequest ()
+{
+    local FD=${1}; shift
+    
+    # always use unified protocol and let the server validate the number of parameters
+    local ARRAY=( "${@}" )
+    local CMD=("*$[${#ARRAY[@]}]")
+    local i
+    for ((i=0;i<${#ARRAY[@]};i++)); do
+		CMD=( "${CMD[@]}" "\$${#ARRAY[${i}]}" "${ARRAY[${i}]}" )
+    done
+    printf "%s\r\n" "${CMD[@]}" >&${FD}
+    [ "${DEBUG}" -ne 0 ] && echo "redis_sendrequest: ${CMD[@]}" > /dev/stderr
+}
+
+# Send request to the server and get reply into the result array
+function redis_client()
+{
+    local FD=${1}; shift
+    local d="${1}"; shift
+
+	redis_sendrequest ${FD} "${@}"
+	redis_getreply ${FD} "${d}"
+}
+
+function redis_connect()
+{
+	local -n conn=${1}; shift
+	local -n fd=${1}; shift
+		
+	timeout 0.1 bash -c "</dev/tcp/${conn[host]}/${conn[port]}"
+	if [ $? -ne 0 ]; then
+		echo "Connection to ${conn[host]}:${conn[port]} failed" >/dev/stderr
+		return 1
+	fi
+
+	exec {fd}<>/dev/tcp/${conn[host]}/${conn[port]}
+	if [ $? -ne 0 ]; then
+		echo "Connection to ${conn[host]}:${conn[port]} failed" >/dev/stderr
+		return 1
+	fi
+	[ "${DEBUG}" -ne 0 ] && echo "redis_connect: connected to ${conn[host]}:${conn[port]}"
+
+	return 0
+}
+
+function redis_disconnect()
+{
+	local fd=${1}
+	
+	exec {fd}>&-
+	exec {fd}<&-
+}
+
+# Connect to a redis instance, choosing mode of operation
+function redis_connect_pool()
+{
+	local -n pool=${1}; shift
+	local fd=${1}; shift
+	local -n auth=${1}; shift
+	local target=${1}; shift # "master", "slave", "sentinel" or "any"
+	local mastername=${1} # mandatory with sentinels, optional otherwise
+	local tmpname
+	local STR1
+	local ROLE
+
+	local i
+	local rc=1
+	for ((i=0; i<${#pool[@]}; i+=2)); do
+		local -A CONN=( [host]="${pool[i]}" [port]="${pool[i+1]}" )
+		
+		redis_connect CONN ${fd}
+		if [ $? -eq 0 ]; then
+			[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: connected to ${CONN[host]}:${CONN[port]}"
+			rc=0
+			break
+		fi
+	done
+	
+	if [ ${rc} -ne 0 ]; then
+		echo "redis_connect_pool: no suitable server found" 2>/dev/stderr
+		return 1
+	fi
+
+	if [ "${auth[password]}" ]; then
+		[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: attempting authentication with ${CONN[host]}:${CONN[port]}"
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_client ${!fd} "${tmpname}" AUTH "${auth[password]}"
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+		redis_strval ${tmpname} STR1
+		if [ "${STR1}" != "OK" ]; then
+			echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+	fi
+
+	[ "${target}" == "any" ] && return 0
+	
+	tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+	redis_client ${FD} "${tmpname}" ROLE
+	if [ $? -ne 0 ]; then
+		echo "redis_connect_pool: ROLE command failed" >/dev/stderr
+		redis_disconnect {fd}
+		return 1
+	fi
+	redis_strval ${tmpname} STR1 0
+	if [ "${STR1}" != "sentinel" ]; then
+		[ "${target}" == "${STR1}" ] && return 0
+		echo "redis_connect_pool: ${starget} wanted but only ${STR1} available at ${conn[host]}:${conn[port]}" >/dev/stderr
+		return 1
+	fi
+	
+	# Handle sentinel
+	if [ "${target}" == "master" ]; then
+		local MASTER_IP
+		local MASTER_PORT
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" SENTINEL get-master-addr-by-name "${mastername}"
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: SENTINEL get-master-addr-by-name command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+		redis_sizeval ${tmpname} STR1
+		if [ "${STR1}" == "-1" ]; then
+			echo "redis_connect_pool: no such master-name ${mastername}"
+			redis_disconnect {fd}
+			return 1
+		fi
+		
+		redis_strval ${tmpname} MASTER_IP 0
+		redis_strval ${tmpname} MASTER_PORT 1
+		[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: redirecting to master ${MASTER_IP}:${MASTER_PORT}"
+		redis_disconnect {fd}
+		
+		local -A CONN=( [host]="${MASTER_IP}" [port]="${MASTER_PORT}" )
+		redis_connect CONN ${fd}
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: connection failed to master ${MASTER_IP}, ${MASTER_PORT}" >/dev/stderr
+			return 1
+		fi
+		[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: connected to master ${MASTER_IP}:${MASTER_PORT}"
+		
+		# Is it really a master?
+		if [ "${auth[password]}" ]; then
+			[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: attempting authentication with ${MASTER_IP}:${MASTER_PORT}"
+			tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+			redis_client ${!fd} "${tmpname}" AUTH "${auth[password]}"
+			if [ $? -ne 0 ]; then
+				echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+				redis_disconnect {fd}
+				return 1
+			fi
+			redis_strval ${tmpname} STR1
+			if [ "${STR1}" != "OK" ]; then
+				echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+				redis_disconnect {fd}
+				return 1
+			fi
+		fi
+
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" ROLE
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: ROLE command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+		redis_strval ${tmpname} STR1 0
+		if [ "${STR1}" != "master" ]; then
+			echo "redis_connect_pool: ${MASTER_IP}:${MASTER_PORT} is not a master"
+			redis_disconnect {fd}
+			return 1
+		fi
+		
+		
+	elif [ "${target}" == "slave" ]; then
+		local SLAVE_IP
+		local SLAVE_PORT
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" SENTINEL replicas "${mastername}"
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: SENTINEL replicas command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+		redis_sizeval ${tmpname} STR1
+		if [ "${STR1}" == "-1" ]; then
+			echo "redis_connect_pool: no such master-name ${mastername}"
+			redis_disconnect {fd}
+			return 1
+		fi
+		
+		redis_strval ${tmpname} SLAVE_IP 0 3
+		redis_strval ${tmpname} SLAVE_PORT 0 5
+		[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: redirecting to slave ${SLAVE_IP}:${SLAVE_PORT}"
+		redis_disconnect {fd}
+		
+		local -A CONN=( [host]="${SLAVE_IP}" [port]="${SLAVE_PORT}" )
+		redis_connect CONN ${fd}
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: connection failed to slave ${SLAVE_IP}, ${SLAVE_PORT}" >/dev/stderr
+			return 1
+		fi
+		[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: connected to slave ${SLAVE_IP}:${SLAVE_PORT}"
+
+		# Is it really a slave?
+		if [ "${auth[password]}" ]; then
+			[ ${DEBUG} -ne 0 ] && echo "redis_connect_pool: attempting authentication with ${SLAVE_IP}:${SLAVE_PORT}"
+			tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+			redis_client ${!fd} "${tmpname}" AUTH "${auth[password]}"
+			if [ $? -ne 0 ]; then
+				echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+				redis_disconnect {fd}
+				return 1
+			fi
+			redis_strval ${tmpname} STR1
+			if [ "${STR1}" != "OK" ]; then
+				echo "redis_connect_pool: AUTH command failed" >/dev/stderr
+				redis_disconnect {fd}
+				return 1
+			fi
+		fi
+
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" ROLE
+		if [ $? -ne 0 ]; then
+			echo "redis_connect_pool: ROLE command failed" >/dev/stderr
+			redis_disconnect {fd}
+			return 1
+		fi
+		redis_strval ${tmpname} STR1 0
+		if [ "${STR1}" != "slave" ]; then
+			echo "redis_connect_pool: ${SLAVE_IP}:${SLAVE_PORT} is not a slave"
+			redis_disconnect {fd}
+			return 1
+		fi
+
+
+	fi
+
+	return 0
 }
