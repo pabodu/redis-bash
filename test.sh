@@ -51,9 +51,14 @@ redis_connect_pool CONN_POOL FD AUTH "master" "mymaster"
 #tmpname="array_${RANDOM}"
 #eval "declare -A ${tmpname}"
 #[ ${DEBUG} -ne 0 ] && echo "Root array: ${tmpname}"
-#redis_client ${FD} "${tmpname}" GET "pbdu/server" || errexit "SET command failed"
+#redis_client ${FD} "${tmpname}" GET "pbdu/server" || errexit "GET command failed"
 #redis_strval ${tmpname} STR1 || errexit "redis_strval failed"
 #echo "server is ${STR1}"
 
-redis_disconnect ${FD}
+#tmpname="array_${RANDOM}"
+#eval "declare -A ${tmpname}"
+#[ ${DEBUG} -ne 0 ] && echo "Root array: ${tmpname}"
+#redis_client ${FD} "${tmpname}" MGET key1 key2 nonexisting || errexit "MGET command failed"
+#redis_strval ${tmpname} STR1 || errexit "redis_strval failed"
 
+redis_disconnect ${FD}

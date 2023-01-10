@@ -1,7 +1,7 @@
 #!/bin/bash
 # Based on https://github.com/caquino/redis-bash
 
-DEBUG=0
+DEBUG=1
 #LOGFILE="/tmp/redis-bash.log"
 MAXSTACK=100 # Limit recursion
 
@@ -44,7 +44,7 @@ function redis_strval()
 }
 
 # Get a size value from the result array
-# (mainly used to check NULL arrays in which case size is "-1")
+# (mainly used to check NULL arrays (and strings) in which case size is "-1")
 function redis_sizeval()
 {
 
@@ -88,19 +88,22 @@ function redis_getreply ()
 		printf "redis_getreply: no reply\n"
 		return 2
 	fi
-
+	
+	local retval=0
 	REPLY=${REPLY:0:${#REPLY}-1}
 #	[ "${DEBUG}" -ne 0 ] && echo "redis_getreply: ${REPLY}" > /dev/stderr
 	case ${REPLY} in
-		-*|\$-*) # error message
+		-*) # error message
 			dataref[type]='-'
 			dataref[value]="${REPLY:1}"
-			return 16;;
+			retval=16;;
 		\$*) # message size
-			dataref[size]="${REPLY:1}" # without trailing \r\n
-			[ ${REPLY:1} -gt 0 ] && read -r -N "$[${dataref[size]}+2]" -u "${FD}" # read again to get the value itself
 			dataref[type]='$'
-			dataref[value]="${REPLY:0:(-2)}"
+			dataref[size]="${REPLY:1}" # without trailing \r\n
+			if [ ${REPLY:1} -gt 0 ]; then
+				read -r -N "$[${dataref[size]}+2]" -u "${FD}" # read again to get the value itself
+				dataref[value]="${REPLY:0:(-2)}"
+			fi
 			;;
 		:*) # integer message
 			dataref[type]=':'
@@ -117,7 +120,10 @@ function redis_getreply ()
 
 				dataref[value]="${dataref[value]} ${tmpname}"
 				redis_getreply ${FD} "${tmpname}"
-				[ $? -ne 0 ] && return $?
+				if [ $? -ne 0 ]; then
+					retval=$?
+					break
+				fi
 			done
 			;;
 		+*) # standard message
@@ -127,7 +133,7 @@ function redis_getreply ()
 	esac
 	[ "${DEBUG}" -ne 0 ] && printf "redis_getreply: " && declare -p ${!dataref}
 #    printf "%s\n" "${dataref[value]}"
-	return 0
+	return ${retval}
 }
 
 # Send request to the server

@@ -15,25 +15,39 @@ if [ $? -ne 0 ]; then
 fi
 REDISHOST=localhost
 REDISPORT=6379
-while getopts ":h:p:" opt
+while getopts ":h:p:a:" opt
 do
     case ${opt} in
         h) REDISHOST=${OPTARG};;
         p) REDISPORT=${OPTARG};;
+        a) PASSWORD=${OPTARG};;
     esac
 done
 shift $((${OPTIND} - 1))
 while true
 do
-    exec 5>&-
     if [ "${REDISHOST}" != "" ] && [ "${REDISPORT}" != "" ]
     then
-        exec 5<>/dev/tcp/${REDISHOST}/${REDISPORT} # open fd
+		declare -A CONN=( [host]="${REDISHOST}" [port]="${REDISPORT}" )
+		redis_connect CONN FD || exit 1
     else
         echo "Wrong arguments"
         exit 255
     fi
-    redis-client 5 SUBSCRIBE ${1} > /dev/null # subscribe to the pubsub channel in fd 5
+	local AUTH=( [password]="$PASSWORD" )
+		if [ "${PASSWORD}" != "" ]; then
+		tmpname="array_${RANDOM}"
+		eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" AUTH "${PASSWORD}"
+		if [ $? -ne 0 ]; then
+			echo "AUTH command failed"
+			exit 1
+		fi
+	fi
+
+	tmpname="array_${RANDOM}"
+	eval "declare -A ${tmpname}"
+    redis_client ${FD} "${tmpname}" SUBSCRIBE ${1} # subscribe to the pubsub channel in fd ${FD}
     while true
     do
         unset ARGV
