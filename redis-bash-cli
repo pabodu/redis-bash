@@ -1,5 +1,5 @@
 #!/bin/bash 
-# https://github.com/caquino/redis-bash
+# Based on https://github.com/caquino/redis-bash
 # Poor man profiling - uncoment the next 2 lines
 #set -x
 #PS4='$(date "+%s.%N ($LINENO) + ")'
@@ -23,24 +23,54 @@ do
         n) REDISDB=${OPTARG};;
         p) REDISPORT=${OPTARG};;
         r) REPEAT=${OPTARG};;
-        a) AUTH=${OPTARG};;
+        a) PASSWORD=${OPTARG};;
         i) DELAY=${OPTARG};;
     esac
 done
 shift $((${OPTIND} - 1))
 if [ "${REDISHOST}" != "" ] && [ "${REDISPORT}" != "" ]
 then
-    # open fd
-    exec 6<>/dev/tcp/"$REDISHOST"/"$REDISPORT" || exit
+	declare -A CONN=( [host]="${REDISHOST}" [port]="${REDISPORT}" )
+	redis_connect CONN FD || exit 1
 else
     echo "Wrong arguments"
     exit 255
 fi
-[ "${AUTH}" != "" ] && redis-client 6 AUTH "$AUTH" > /dev/null
-[ "${REDISDB}" != "" ] && redis-client 6 SELECT "$REDISDB" > /dev/null
-for ((z=1;z<=${REPEAT};z++))
-do
-    redis-client 6 "$@" || exit
-    [ ${DELAY} -gt 0 ] && sleep ${DELAY}
-done
-exec 6>&- #close fd
+AUTH=( [password]="$PASSWORD" )
+if [ "${PASSWORD}" != "" ]; then
+	tmpname="array_${RANDOM}"
+	eval "declare -A ${tmpname}"
+	redis_client ${FD} "${tmpname}" AUTH "${PASSWORD}"
+	if [ $? -ne 0 ]; then
+		echo "AUTH command failed"
+		exit 1
+	fi
+fi
+if [ "${REDISDB}" != "" ]; then
+	tmpname="array_${RANDOM}"
+	eval "declare -A ${tmpname}"
+	redis_client ${FD} "${tmpname}" SELECT "${REDISDB}"
+	if [ $? -ne 0 ]; then
+		echo "SELECT command failed"
+		exit 1
+	fi
+fi
+if [ $# -ne 0 ]; then
+	for ((z=1;z<=${REPEAT};z++)); do
+		tmpname="array_${RANDOM}"
+		eval "declare -A ${tmpname}"
+		redis_client ${FD} "${tmpname}" "$@"
+		if [ $? -ne 0 ]; then
+			echo "${1} command failed"
+			exit 1
+		fi
+		if [ "${1^^}" == "GET" ]; then
+			redis_strval "${tmpname}" RES || exit 1
+			echo "${RES}"
+		fi
+		[ ${DELAY} -gt 0 ] && sleep ${DELAY}
+	done
+fi
+
+redis_disconnect ${FD}
+

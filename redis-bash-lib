@@ -1,8 +1,8 @@
 #!/bin/bash
 # Based on https://github.com/caquino/redis-bash
 
-DEBUG=1
-LOGFILE="/tmp/redis-bash.log"
+DEBUG=0
+#LOGFILE="/tmp/redis-bash.log"
 MAXSTACK=100 # Limit recursion
 
 if [ "x${LOGFILE}" != "x" ]; then
