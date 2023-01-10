@@ -42,18 +42,22 @@ if [ "${PASSWORD}" != "" ]; then
 	eval "declare -A ${tmpname}"
 	redis_client ${FD} "${tmpname}" AUTH "${PASSWORD}"
 	if [ $? -ne 0 ]; then
-		echo "AUTH command failed"
+		redis_strval "${tmpname}" STR1
+		echo "AUTH command failed: ${STR1}"
 		exit 1
 	fi
+	unset ${!tmpname}
 fi
 if [ "${REDISDB}" != "" ]; then
 	tmpname="array_${RANDOM}"
 	eval "declare -A ${tmpname}"
 	redis_client ${FD} "${tmpname}" SELECT "${REDISDB}"
 	if [ $? -ne 0 ]; then
-		echo "SELECT command failed"
+		redis_strval "${tmpname}" STR1
+		echo "SELECT command failed: ${STR1}"
 		exit 1
 	fi
+	unset ${!tmpname}
 fi
 if [ $# -ne 0 ]; then
 	for ((z=1;z<=${REPEAT};z++)); do
@@ -61,13 +65,15 @@ if [ $# -ne 0 ]; then
 		eval "declare -A ${tmpname}"
 		redis_client ${FD} "${tmpname}" "$@"
 		if [ $? -ne 0 ]; then
-			echo "${1} command failed"
+			redis_strval "${tmpname}" STR1
+			echo "${1} command failed: ${STR1}"
 			exit 1
 		fi
 		if [ "${1^^}" == "GET" ]; then
 			redis_strval "${tmpname}" RES || exit 1
 			echo "${RES}"
 		fi
+		unset ${!tmpname}
 		[ ${DELAY} -gt 0 ] && sleep ${DELAY}
 	done
 fi

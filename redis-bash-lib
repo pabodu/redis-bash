@@ -72,6 +72,15 @@ function redis_sizeval()
 	return 0
 }
 
+function redis_type()
+{
+	local -n dataref=${1}; shift
+	local -n typeref=${1}; shift
+	
+	typeref="${dataref[type]}"
+	[ "${DEBUG}" -ne 0 ] && echo "redis_type: ${typeref}"
+	return 0
+}
 
 # Get a reply from the server and fill in the result array
 function redis_getreply ()
@@ -91,7 +100,7 @@ function redis_getreply ()
 	
 	local retval=0
 	REPLY=${REPLY:0:${#REPLY}-1}
-#	[ "${DEBUG}" -ne 0 ] && echo "redis_getreply: ${REPLY}" > /dev/stderr
+	[ "${DEBUG}" -ne 0 ] && echo "redis_getreply: ${REPLY}"
 	case ${REPLY} in
 		-*) # error message
 			dataref[type]='-'
