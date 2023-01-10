@@ -14,9 +14,9 @@ source /home/pbd/redis-bash/redis-bash-lib
 #redis_connect CONN FD
 
 CONN_POOL=( )
-CONN_POOL+=("192.168.122.100" "26379")
-CONN_POOL+=("192.168.122.101" "26379")
-CONN_POOL+=("192.168.122.102" "26379")
+CONN_POOL+=("10.0.0.11" "26379")
+CONN_POOL+=("10.0.0.13" "26379")
+CONN_POOL+=("10.0.0.16" "26379")
 
 AUTH=( [password]="A1B2C3" )
 

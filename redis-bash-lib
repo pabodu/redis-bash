@@ -117,6 +117,7 @@ function redis_getreply ()
 
 				dataref[value]="${dataref[value]} ${tmpname}"
 				redis_getreply ${FD} "${tmpname}"
+				[ $? -ne 0 ] && return $?
 			done
 			;;
 		+*) # standard message
