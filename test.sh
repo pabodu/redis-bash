@@ -14,30 +14,33 @@ source /home/pbd/redis-bash/redis-bash-lib
 #redis_connect CONN FD
 
 CONN_POOL=( )
-CONN_POOL+=("192.168.122.100" "26379")
-CONN_POOL+=("192.168.122.101" "26379")
-CONN_POOL+=("192.168.122.102" "26379")
+CONN_POOL+=( "192.168.122.100" "26379" )
+CONN_POOL+=( "192.168.122.101" "26379" )
+CONN_POOL+=( "192.168.122.102" "26379" )
 
 AUTH=( [password]="A1B2C3" )
 
 redis_connect_pool CONN_POOL FD AUTH "master" "mymaster"
 declare -A CHANNELS
-CHANNELS+=([channel]="channel1" [callback]="callback_function1")
-CHANNELS+=([channel]="channel2" [callback]="callback_function2")
+CHANNELS+=( [channel1]="callback_function1" )
+CHANNELS+=( [channel2]="callback_function2" )
 
-redis_pubsub_subscribe FD "${CHANNELS}" || errexit "redis_pubsub_subscribe failed"
-
+# Callbacks must be defined prior to calling redis_pubsub_subscribe
 function callback_function1()
 {
-		echo "callback_function1"
-		return 0
+	# Args: channel message
+	echo "callback_function1: $1 $2"
+	return 0
 }
 
 function callback_function2()
 {
-		echo "callback_function2"
-		return 0
+	# Args: channel message
+	echo "callback_function2: $1 $2"
+	return 0
 }
+
+redis_pubsub_subscribe FD CHANNELS || errexit "redis_pubsub_subscribe failed"
 
 #tmpname="array_${RANDOM}"
 #eval "declare -A ${tmpname}"

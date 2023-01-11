@@ -247,7 +247,7 @@ function redis_connect_pool()
 		fi
 	fi
 
-	[ "${target}" == "any" ] && return 0
+	[ "${target}" = "any" ] && return 0
 	
 	tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
 	redis_client ${FD} "${tmpname}" ROLE
@@ -258,13 +258,13 @@ function redis_connect_pool()
 	fi
 	redis_strval ${tmpname} STR1 0
 	if [ "${STR1}" != "sentinel" ]; then
-		[ "${target}" == "${STR1}" ] && return 0
+		[ "${target}" = "${STR1}" ] && return 0
 		echo "redis_connect_pool: ${starget} wanted but only ${STR1} available at ${conn[host]}:${conn[port]}"
 		return 1
 	fi
 	
 	# Handle sentinel
-	if [ "${target}" == "master" ]; then
+	if [ "${target}" = "master" ]; then
 		local MASTER_IP
 		local MASTER_PORT
 		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
@@ -275,7 +275,7 @@ function redis_connect_pool()
 			return 1
 		fi
 		redis_sizeval ${tmpname} STR1
-		if [ "${STR1}" == "-1" ]; then
+		if [ "${STR1}" = "-1" ]; then
 			echo "redis_connect_pool: no such master-name ${mastername}"
 			redis_disconnect {fd}
 			return 1
@@ -327,7 +327,7 @@ function redis_connect_pool()
 		fi
 		
 		
-	elif [ "${target}" == "slave" ]; then
+	elif [ "${target}" = "slave" ]; then
 		local SLAVE_IP
 		local SLAVE_PORT
 		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
@@ -338,7 +338,7 @@ function redis_connect_pool()
 			return 1
 		fi
 		redis_sizeval ${tmpname} STR1
-		if [ "${STR1}" == "-1" ]; then
+		if [ "${STR1}" = "-1" ]; then
 			echo "redis_connect_pool: no such master-name ${mastername}"
 			redis_disconnect {fd}
 			return 1
@@ -397,4 +397,64 @@ function redis_connect_pool()
 
 function redis_pubsub_subscribe()
 {
+	local -n fd=${1}; shift
+	local -n channels="${1}"; shift
+	local tmpname
+	local retval=0
+
+	local charr=( "${!channels[@]}" )
+
+
+
+#	[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: SUBSCRIBE ${charr[@]}"
+	redis_sendrequest ${fd} SUBSCRIBE ${charr[*]}
+
+	# Confirm subscriptions
+	while true; do
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_getreply ${fd} "${tmpname}"
+		if [ $? -ne 0 ]; then
+			retval=1
+			return $retval
+		fi
+		redis_strval "${tmpname}" STR1 0
+		[ "${STR1}" = "message" ] && break
+		if [ "${STR1}" = "subscribe" ]; then
+			redis_strval "${tmpname}" STR2 1
+			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: subscribed to channel ${STR2}"
+		else
+			echo "redis_pubsub_subscribe: unknown message received: ${STR1}"
+			return 1
+		fi
+	done
+
+	# Message handling loop
+	while true; do
+		redis_strval "${tmpname}" STR0 0 
+		if [ "${STR0}" != "message" ]; then
+			echo "redis_pubsub_subscribe: unknown message received: ${STR0}"
+			return 1
+		fi
+
+		redis_strval "${tmpname}" STR1 1 
+		redis_strval "${tmpname}" STR2 2
+		[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: message received from channel ${STR1}: ${STR2}"
+
+		if [ -n "${channels[${STR1}]}" ]; then
+			local callback="${channels[${STR1}]}"
+			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: executing callback ${callback}"
+			$callback "${STR1}" "${STR2}"
+		fi
+		unset "${tmpname}"
+
+		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
+		redis_getreply ${fd} "${tmpname}"
+		if [ $? -ne 0 ]; then
+			retval=1
+			unset ${!tmpname}
+			break
+		fi
+	done
+
+	return $retval
 }
