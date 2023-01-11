@@ -11,8 +11,8 @@ if [ "x${LOGFILE}" != "x" ]; then
 fi
 
 if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-    echo "This script requires bash version 4+"
-    exit 1
+	echo "This script requires bash version 4+"
+	exit 1
 fi
 
 # Get a string value from the result array
@@ -148,24 +148,24 @@ function redis_getreply ()
 # Send request to the server
 function redis_sendrequest ()
 {
-    local FD=${1}; shift
-    
-    # always use unified protocol and let the server validate the number of parameters
-    local ARRAY=( "${@}" )
-    local CMD=("*$[${#ARRAY[@]}]")
-    local i
-    for ((i=0;i<${#ARRAY[@]};i++)); do
+	local FD=${1}; shift
+	
+	# always use unified protocol and let the server validate the number of parameters
+	local ARRAY=( "${@}" )
+	local CMD=("*$[${#ARRAY[@]}]")
+	local i
+	for ((i=0;i<${#ARRAY[@]};i++)); do
 		CMD=( "${CMD[@]}" "\$${#ARRAY[${i}]}" "${ARRAY[${i}]}" )
-    done
-    printf "%s\r\n" "${CMD[@]}" >&${FD}
-    [ "${DEBUG}" -ne 0 ] && echo "redis_sendrequest: ${CMD[*]}"
+	done
+	printf "%s\r\n" "${CMD[@]}" >&${FD}
+	[ "${DEBUG}" -ne 0 ] && echo "redis_sendrequest: ${CMD[*]}"
 }
 
 # Send request to the server and get reply into the result array
 function redis_client()
 {
-    local FD=${1}; shift
-    local d="${1}"; shift
+	local FD=${1}; shift
+	local d="${1}"; shift
 
 	redis_sendrequest ${FD} "${@}"
 	redis_getreply ${FD} "${d}"
@@ -393,4 +393,8 @@ function redis_connect_pool()
 	fi
 
 	return 0
+}
+
+function redis_pubsub_subscribe()
+{
 }
