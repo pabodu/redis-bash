@@ -21,6 +21,23 @@ CONN_POOL+=("10.0.0.16" "26379")
 AUTH=( [password]="A1B2C3" )
 
 redis_connect_pool CONN_POOL FD AUTH "master" "mymaster"
+declare -A CHANNELS
+CHANNELS+=([channel]="channel1" [callback]="callback_function1")
+CHANNELS+=([channel]="channel2" [callback]="callback_function2")
+
+redis_pubsub_subscribe FD "${CHANNELS}" || errexit "redis_pubsub_subscribe failed"
+
+function callback_function1()
+{
+		echo "callback_function1"
+		return 0
+}
+
+function callback_function2()
+{
+		echo "callback_function2"
+		return 0
+}
 
 #tmpname="array_${RANDOM}"
 #eval "declare -A ${tmpname}"

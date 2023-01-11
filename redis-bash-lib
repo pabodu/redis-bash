@@ -259,7 +259,7 @@ function redis_connect_pool()
 	redis_strval ${tmpname} STR1 0
 	if [ "${STR1}" != "sentinel" ]; then
 		[ "${target}" == "${STR1}" ] && return 0
-		echo "redis_connect_pool: ${starget} wanted but only ${STR1} available at ${conn[host]}:${conn[port]}" >/dev/stderr
+		echo "redis_connect_pool: ${starget} wanted but only ${STR1} available at ${conn[host]}:${conn[port]}"
 		return 1
 	fi
 	

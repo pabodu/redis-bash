@@ -66,7 +66,7 @@ do
     do
 		tmpname="array_${RANDOM}"
 		eval "declare -A ${tmpname}"
-		redis_getreply ${FD} "${tmpname}"
+		redis_getreply ${FD} "${tmpname}" || break
 		redis_strval "${tmpname}" STR1 0
 		redis_strval "${tmpname}" STR2 1
 		if [ "${STR1}" = "message" ] && [ "${STR2}" = "${1}" ]; then
