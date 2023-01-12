@@ -20,23 +20,32 @@ CONN_POOL+=( "192.168.122.102" "26379" )
 
 AUTH=( [password]="A1B2C3" )
 
-redis_connect_pool CONN_POOL FD AUTH "master" "mymaster"
+redis_connect_pool CONN_POOL FD AUTH "master" "mymaster" || errexit "redis_connect_pool failed"
+
 declare -A CHANNELS
-CHANNELS+=( [channel1]="callback_function1" )
-CHANNELS+=( [channel2]="callback_function2" )
+CHANNELS+=( [control]="callback_control" )
+CHANNELS+=( [simplereader]="callback_simplereader" )
 
 # Callbacks must be defined prior to calling redis_pubsub_subscribe
-function callback_function1()
+function callback_control()
 {
-	# Args: channel message
-	echo "callback_function1: $1 $2"
+	# Args: fd result_array channel message
+	local fd=${1}; shift
+	local tmpname=${1}; shift
+	local channel=${1}; shift
+	local message=${1}
+	local msgarr=( ${message} )
+
+	[ ${DEBUG} -ne 0 ] && echo "callback_control: channel=${channel} message=${message}"
+	redis_sendrequest ${fd} "${msgarr[@]}"
+	redis_getreply ${fd} "${tmpname}" || return 1
 	return 0
 }
 
-function callback_function2()
+function callback_simplereader()
 {
-	# Args: channel message
-	echo "callback_function2: $1 $2"
+	# Args: fd result_array channel message
+	[ ${DEBUG} -ne 0 ] && echo "callback_simplereader: channel=${3} message=${4}"
 	return 0
 }
 

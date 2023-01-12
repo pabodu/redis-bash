@@ -87,6 +87,7 @@ function redis_getreply ()
 {
 	local FD=${1}; shift
 	local -n dataref=${1}; shift
+	local ID=${RANDOM}
 
 	if [ ${#FUNCNAME[@]} -gt ${MAXSTACK} ]; then
 		printf "redis_getreply: recursive function call limit ${MAXSTACK} exceeded\n"
@@ -109,7 +110,7 @@ function redis_getreply ()
 		\$*) # message size
 			dataref[type]='$'
 			dataref[size]="${REPLY:1}" # without trailing \r\n
-			if [ ${REPLY:1} -gt 0 ]; then
+			if [ ${REPLY:1} -ge 0 ]; then
 				read -r -N "$[${dataref[size]}+2]" -u "${FD}" # read again to get the value itself
 				dataref[value]="${REPLY:0:(-2)}"
 			fi
@@ -140,7 +141,7 @@ function redis_getreply ()
 			dataref[value]="${REPLY:1}"
 			;;
 	esac
-	[ "${DEBUG}" -ne 0 ] && printf "redis_getreply: " && declare -p ${!dataref}
+	[ "${DEBUG}" -ne 0 ] && printf "redis_getreply (${ID}): " && declare -p ${!dataref}
 #    printf "%s\n" "${dataref[value]}"
 	return ${retval}
 }
@@ -406,54 +407,44 @@ function redis_pubsub_subscribe()
 
 
 
-#	[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: SUBSCRIBE ${charr[@]}"
+	[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: SUBSCRIBE ${charr[@]}"
 	redis_sendrequest ${fd} SUBSCRIBE ${charr[*]}
 
-	# Confirm subscriptions
 	while true; do
 		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
-		redis_getreply ${fd} "${tmpname}"
-		if [ $? -ne 0 ]; then
-			retval=1
-			return $retval
-		fi
-		redis_strval "${tmpname}" STR1 0
-		[ "${STR1}" = "message" ] && break
-		if [ "${STR1}" = "subscribe" ]; then
-			redis_strval "${tmpname}" STR2 1
-			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: subscribed to channel ${STR2}"
-		else
-			echo "redis_pubsub_subscribe: unknown message received: ${STR1}"
+		redis_getreply ${fd} "${tmpname}"; local exitcode=$?
+		if [ ${exitcode} -eq 2 ]; then
+			# Connection closed
+			retval=0
+			break
+		elif [ ${exitcode} -eq 1 ]; then
 			return 1
 		fi
-	done
+		redis_strval "${tmpname}" STR0 0
+		if [ "${STR0}" = "subscribe" ]; then
+			redis_strval "${tmpname}" STR1 1
+			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: subscribed to channel ${STR1}"
+		elif [ "${STR0}" = "unsubscribe" ]; then
+			redis_strval "${tmpname}" STR1 1
+			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: unsubscribed from channel ${STR1}"
+		elif [ "${STR0}" = "message" ]; then
+		
+			redis_strval "${tmpname}" STR1 1 
+			redis_strval "${tmpname}" STR2 2
+			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: message received from channel ${STR1}: ${STR2}"
 
-	# Message handling loop
-	while true; do
-		redis_strval "${tmpname}" STR0 0 
-		if [ "${STR0}" != "message" ]; then
-			echo "redis_pubsub_subscribe: unknown message received: ${STR0}"
-			return 1
-		fi
-
-		redis_strval "${tmpname}" STR1 1 
-		redis_strval "${tmpname}" STR2 2
-		[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: message received from channel ${STR1}: ${STR2}"
-
-		if [ -n "${channels[${STR1}]}" ]; then
-			local callback="${channels[${STR1}]}"
-			[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: executing callback ${callback}"
-			$callback "${STR1}" "${STR2}"
+			if [ -n "${channels[${STR1}]}" ]; then
+				local callback="${channels[${STR1}]}"
+				[ ${DEBUG} -ne 0 ] && echo "redis_pubsub_subscribe: executing callback ${callback}"
+			  	${callback} ${fd} "${tmpname}" "${STR1}" "${STR2}"
+				if [ $? -ne 0 ]; then
+					echo "redis_pubsub_subscribe: callback ${callback} failed"
+					unset "${tmpname}"
+					return 1
+				fi
+			fi
 		fi
 		unset "${tmpname}"
-
-		tmpname="array_${RANDOM}"; eval "declare -A ${tmpname}"
-		redis_getreply ${fd} "${tmpname}"
-		if [ $? -ne 0 ]; then
-			retval=1
-			unset ${!tmpname}
-			break
-		fi
 	done
 
 	return $retval
