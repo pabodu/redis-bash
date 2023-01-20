@@ -62,7 +62,7 @@ function redis_sizeval()
 		fi
 
 		local tmparr=(${dataref[value]})
-		redis_sizeval ${tmparr[$arg]} ${!strref} "${@}"
+		redis_sizeval ${tmparr[$arg]} ${!sizeref} "${@}"
 
 		return $?
 	fi
